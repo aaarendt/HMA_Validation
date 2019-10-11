@@ -1,0 +1,31 @@
+name: himat
+channels:
+- conda-forge
+- digitalglobe
+dependencies:
+- python=3.6
+- jupyter
+- geopandas
+- geojson
+- gdal
+- dask
+- pysal
+- rasterstats
+- seaborn
+- mplleaflet
+- folium
+- cartopy
+- rasterio
+- xarray
+- sqlalchemy
+- psycopg2
+- progressbar2
+- zarr
+- s3fs
+- jupyterlab 
+- h5py
+- netcdf4  
+- pip:
+  - regionmask
+  - pyastronomy
+  - salem
