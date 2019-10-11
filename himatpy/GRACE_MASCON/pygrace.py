@@ -229,26 +229,39 @@ def __aggregate_mascon(ds, geo, product):
     product:
     
     """
-    sel = ds[product].sel(long=slice(geo[0], geo[2]), lat=slice(geo[1], geo[3]))
+    #sel = ds[product].sel(long=slice(geo[0], geo[2]), lat=slice(geo[1], geo[3]))
+    # The above is not working when data not on lat/lon grid
+    sel = ds[product].where( (ds.long>=geo[0]) & (ds.long<=geo[2]) & \
+                            (ds.lat>=geo[1]) & (ds.lat<= geo[3]) )
     agg_data = sel.mean(axis=(1,2)).data
     return agg_data
+
 
 def select_mascons(ds, mascon_gdf):
     """
     Clips the mascon grid to the spatial extent of the underlying data over which aggregation is occurring.
+	Question: does cx take map projection into account, such as when the domain cover the pole or the min/max
+              of lat/lon are not at the corners?
 
     Parameters
     ----------
     ds: xarray dataset
     mascon_gdf: geodataframe
         the geodataframe that contains the GRACE mascon boundaries
+	lat_name: string
+	lon_name: string
 
     Returns
     -------
     geodataframe  
 
     """
-    x_min, x_max, y_min, y_max = ds.long.min(), ds.long[-1].max(), ds.lat.min(), ds.lat.max().values
+    #x_min, x_max, y_min, y_max = ds.long.min(), ds.long[-1].max(), ds.lat.min(), ds.lat.max().values
+    # The MAR is on a x/y grid, so ds.long[-1] does not necessarily work
+    x_min = ds.long.min().values
+    x_max = ds.long.max().values
+    y_min = ds.lat.min().values
+    y_max = ds.lat.max().values
     masked_gdf = mascon_gdf.cx[x_min:x_max,y_min:y_max].copy()
     return masked_gdf
 
@@ -270,8 +283,8 @@ def aggregate_mascons(ds, masked_gdf, scale_factor = 1):
 
     """
 
-    # Array coordinates
-    products = [x for x in ds.data_vars]
+    # Array coordinates:: zheng-edit: exclude lat/lon when they are not dims
+    products = [x for x in ds.data_vars if x not in ['lat','long']]
     time_coords = ds['time'].values
     mascon_coords = masked_gdf['mascon']
     # Get mascon geometries
