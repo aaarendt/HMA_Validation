@@ -11,7 +11,9 @@ __pycache__
 .coverage
 .pytest_cache
 src
+\Data
 
+*.pyc
 *.swp
 *.map
 .idea/
