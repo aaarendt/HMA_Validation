@@ -1,7 +1,20 @@
-#!/usr/bin/env python
+from __future__ import (
+    absolute_import,
+    division,
+    print_function,
+    unicode_literals,
+)
 
-#from distutils.core import setup
-from setuptools import setup
+import os
+
+from codecs import open
+
+from setuptools import find_packages, setup
+
+here = os.path.abspath(os.path.dirname(__file__))
+
+with open(os.path.join(here, "README.md"), encoding="utf-8") as f:
+    long_description = f.read()
 
 #To prepare a new release
 #python setup.py sdist upload
@@ -13,8 +26,8 @@ setup(name='himatpy',
     author_email='arendta@uw.edu',
     license='MIT',
     url='https://github.com/NASA-Planetary-Science/HiMAT',
-    packages=['himatpy', 'himatpy.GRACE_MASCON', 'himatpy.LIS', 'himatpy.MODSCAG', 'himatpy.tools'],
-    long_description=open('README.md').read(),
+    packages=find_packages(),
+    long_description=long_description,
     #install_requires=['gdal','numpy','scipy','matplotlib'],
     #Note: this will write to /usr/local/bin
     scripts=['himatpy/modscag_download.py', 'himatpy/LIS/LISpreprocess.py']
