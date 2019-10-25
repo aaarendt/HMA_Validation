@@ -170,7 +170,7 @@ def trend_analysis(dec_year, series=None, optimization=False, pvalues = None):
         # initial guess
         p0 = np.array([0.0, -5.0, 0.0, 0.0, 0.0, 0.0,0.0,0.0])
         # solved guess
-        fitted_coefficients, success = scipy.optimize.leastsq(errfunc, p0[:], args=(dec_year,series))
+        fitted_coefficients, success = scipy.optimize.leastsq(errfunc, p0[:], args=(series,dec_year))
         return fitted_coefficients
     try:
         series_fit = fitfunc(pvalues, dec_year)
