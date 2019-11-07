@@ -91,6 +91,36 @@ def get_mascon_gdf(mascon_ds):
 
     return mascon_gdf
 
+def masked_mascon_gdf(grc_file,data_ds,mascons_fn='out_mascons.shp',verbose=False):
+    '''
+    return information of mascons in model domain 
+
+    Parameters
+    ----------
+    grc_file: h5py object of GRACE data file
+    data_ds:  xarray Dataset of model data
+    mascons_fn: file name for output/input mascon information
+    
+    Returns
+    -------
+    masked_gdf: geodataframe
+         mascon information for mascons in model domain
+    '''
+    
+    if not os.path.exists(mascons_fn):
+        if verbose:
+            print('... finding mascons in domain and write to {0} ...'.format(mascons_fn))
+        mascon = grc_file['mascon']        
+        mascon_gdf = get_mascon_gdf(mascon)
+        mascon_gdf['mascon'] = mascon_gdf.index
+        masked_gdf = select_mascons(data_ds, mascon_gdf)     
+        masked_gdf.to_file(mascons_fn)
+    else:
+        if verbose:
+            print('... read info of mascons in domain from {0} ...'.format(mascons_fn))
+        masked_gdf = gpd.read_file(mascons_fn)
+        
+    return masked_gdf
 
 def get_cmwe_trend_analysis(mascon_gdf, f):
     """
