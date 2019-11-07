@@ -3,13 +3,23 @@ import os
 import sys
 import glob
 import re
-import datetime
+from datetime import datetime, timedelta
+from importlib import reload
 
 import pandas as pd
 import numpy as np
 import xarray as xr
 from collections import OrderedDict
 from dask.diagnostics import ProgressBar
+
+
+import himatpy, himatpy.GRACE_MASCON.pygrace
+
+# --- reload for development purpose 
+reload(himatpy)
+reload(himatpy.GRACE_MASCON.pygrace)
+from himatpy.GRACE_MASCON.pygrace import aggregate_mascons
+# --- reload for development purpose 
 
 from himatpy.MAR.nsidc_download import cmr_search, cmr_download
 
@@ -83,12 +93,60 @@ def get_xr_dataset(zstore=None,files=None,datadir=None, fname=None,multiple_nc=F
     ds   = ds.update({'SWE':swe})
     ds.update
     # rename the dimensions to be lat/long so that other himatpy utilities are consistent with this
-    ds.rename({'LON':'long', 'LAT':'lat'}, inplace = True)
-    ds.rename({'Y11_190':'Y', 'X11_210':'X','TIME':'time'}, inplace = True)
+    ds = ds.rename({'LON':'long', 'LAT':'lat'})
+    ds = ds.rename({'Y11_190':'Y', 'X11_210':'X','TIME':'time'})
     ds.time.values = d_tt
     return ds
 
 
+def save_agg_mascons(mar_fns,agg_dir,masked_gdf,fulldata=True):
+    '''
+    save MAR data aggregated to GRACE mascons
+    
+    Parameters
+    ----------
+    mar_fns:   file names including full path for the MAR files
+    agg_dir:   output directory of the aggregated data
+    masked_gdf: geodataframe of the info for mascons in MAR domain
+    : params   fulldata=True, if the mar_fns are original full MAR dataset 
+               or abbreviated dataset of key variables.
+
+    Return:
+    outfns:    output file names
+    '''
+    nMARs = len(mar_fns)
+    if not os.path.exists(agg_dir): os.mkdir( os.path.abspath(agg_dir) )
+
+    outfns = []
+    for ifn, marfn in enumerate(mar_fns):
+
+        sdir,sfn = os.path.split(marfn)
+        agg_fn = 'agg_'+sfn
+        agg_fn = os.path.join(agg_dir,agg_fn)   
+
+        tYear  = int(sfn.split('.')[1])
+
+        print('... aggregating '+sfn+' ...')
+
+        if fulldata:
+            ds = get_xr_dataset(fname=marfn,keepVars=[])
+        else:
+            ds = xr.open_dataset(marfn)
+        agg_data = aggregate_mascons(ds, masked_gdf, scale_factor = 1)
+        vns = agg_data['products']
+        vdict = dict()
+        for iv,vn in enumerate(vns):
+            vdict.update( {vn: (('time','mascons'), agg_data['data'][iv].T)} )  
+        tdoy  = agg_data['time']
+        t_all = np.array([datetime(tYear,1,1) + timedelta(days=x) for x in tdoy]) 
+        coord_dict = {'time':t_all,'mascons':agg_data['mascons']}
+        dso = xr.Dataset(vdict, coords = coord_dict  )
+        dso.to_netcdf(agg_fn)
+
+        outfns.append(agg_fn)
+        ds.close()
+        
+    return outfns
 
 
 def download_MAR(short_name=None,version='1',time_start=None,time_end=None,polygon=None,filename_filter=None):
