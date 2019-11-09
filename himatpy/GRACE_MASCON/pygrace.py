@@ -91,7 +91,7 @@ def get_mascon_gdf(mascon_ds):
 
     return mascon_gdf
 
-def masked_mascon_gdf(grc_file,data_ds,mascons_fn='out_mascons.shp',verbose=False):
+def masked_mascon_gdf(grc_file,data_ds=None,mascons_fn='out_mascons.shp',verbose=False):
     '''
     return information of mascons in model domain 
 
@@ -199,8 +199,9 @@ def trend_analysis(dec_year, series=None, optimization=False, pvalues = None):
         errfunc = lambda p, x, y: fitfunc(p,x) - y
         # initial guess
         p0 = np.array([0.0, -5.0, 0.0, 0.0, 0.0, 0.0,0.0,0.0])
-        # solved guess
-        fitted_coefficients, success = scipy.optimize.leastsq(errfunc, p0[:], args=(series,dec_year))
+        p0 = np.array([0.0, -1.0, 0.0, 0.0, 0.0, 0.0,0.0,0.0])
+        # solved guess        
+        fitted_coefficients, success = scipy.optimize.leastsq(errfunc, p0[:], args=(dec_year,series))
         return fitted_coefficients
     try:
         series_fit = fitfunc(pvalues, dec_year)
