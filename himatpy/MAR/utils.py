@@ -18,7 +18,7 @@ import himatpy, himatpy.GRACE_MASCON.pygrace
 # --- reload for development purpose 
 reload(himatpy)
 reload(himatpy.GRACE_MASCON.pygrace)
-from himatpy.GRACE_MASCON.pygrace import aggregate_mascons
+from himatpy.GRACE_MASCON.pygrace import aggregate_mascons, trend_analysis
 # --- reload for development purpose 
 
 from himatpy.MAR.nsidc_download import cmr_search, cmr_download
@@ -111,7 +111,7 @@ def save_agg_mascons(mar_fns,agg_dir,masked_gdf,fulldata=True):
     : params   fulldata=True, if the mar_fns are original full MAR dataset 
                or abbreviated dataset of key variables.
 
-    Return:
+    Returns
     outfns:    output file names
     '''
     nMARs = len(mar_fns)
@@ -147,6 +147,69 @@ def save_agg_mascons(mar_fns,agg_dir,masked_gdf,fulldata=True):
         ds.close()
         
     return outfns
+
+def MAR_trend(
+        agg_fns,vname,
+        t_start='2003-01-07',t_end='2015-12-31'):
+    '''
+    Read aggregated MAR data and apply trend analysis to a specific field
+    
+    Parameters
+    ----------
+    agg_fns:    list of file names with full path to the aggregated MAR data
+    vname:      name of MAR field for trend analysis
+    t_start:    starting date for trend analysis
+    t_end:      end date for trend analysis
+    
+    Returns
+    -------
+    out_df:     pandas DataFrame with mascons and p0 to p7 as columns
+    
+    '''
+
+    with xr.open_mfdataset(agg_fns,concat_dim='time',combine='nested') as ds:
+        mardf = ds.to_dataframe()
+        mardf = mardf.reset_index(level='mascons')
+        gpdf  = mardf.loc[t_start:t_end].groupby('mascons')
+        mascons = list(gpdf.groups.keys())
+        pvals = np.zeros(( 8 , len(mascons) ))
+        im = 0
+        for name, tgroup in mardf.groupby('mascons'):
+            tmar = dt64ToDecyear( tgroup.index.values )
+            mmwe = tgroup[vname].cumsum()
+            pmar = trend_analysis(tmar, series=mmwe,optimization=True)
+            pvals[:,im] = pmar
+            im = im + 1
+        col_names = ['p'+str(i) for i in range(8)]
+        out_df = pd.DataFrame(data=pvals.T,columns=col_names)
+        out_df['mascons'] = mascons
+        out_df = out_df[ ['mascons'] + col_names ]
+    
+    return out_df
+
+
+def dt64ToDecyear(t_in):
+    '''
+    Convert array of datetime64[ns] format to decimal year
+    --- Note: Not specific to MAR dataset or GRACE data. 
+              May consider move this function to another module.
+              Delete if there is built-in function/easier method 
+    Parameters
+    ----------
+    t_in:  np.array/list/pandas DatetimeIndex, dtype: datetime64[ns] 
+
+    returns
+    t_out = np.array of float decimal year
+    '''
+    t_out = np.zeros(t_in.shape)
+    for it,t_i in enumerate(t_in):
+        t64 = t_i.astype('datetime64[s]').astype(datetime)
+        t00 = datetime(t64.year,1,1)
+        t01 = datetime(t64.year+1,1,1)
+        fracyr = (t64-t00).total_seconds()/(t01-t00).total_seconds()
+        t_out[it] = fracyr + t00.year
+    return t_out
+
 
 
 def download_MAR(short_name=None,version='1',time_start=None,time_end=None,polygon=None,filename_filter=None):
