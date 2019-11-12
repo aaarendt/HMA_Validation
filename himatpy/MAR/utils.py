@@ -63,9 +63,10 @@ def get_xr_dataset(zstore=None,files=None,datadir=None, fname=None,multiple_nc=F
             
     # Necessary dimensions 
     needDims = ['TIME','X11_210','Y11_190']
-    if 'SMB' in keepVars: needDims = needDims + ['SECTOR']
+    #if 'SMB' in keepVars: needDims = needDims + ['SECTOR']
     keepDims = keepDims + [tdim for tdim in needDims if tdim not in keepDims]
-    
+
+    smb  = ds['SMB']
     dzsn = ds['DZSN1']
     rosn = ds['ROSN1']
     swe  = (dzsn*rosn).sum('SNOLAY')/Ro_w
@@ -91,6 +92,8 @@ def get_xr_dataset(zstore=None,files=None,datadir=None, fname=None,multiple_nc=F
             sys.exit("Exiting...")
     # add SWE to dataset
     ds   = ds.update({'SWE':swe})
+    ds   = ds.update({'SMB_ice':smb[:,0]})
+    ds   = ds.update({'SMB_other':smb[:,1]})
     ds.update
     # rename the dimensions to be lat/long so that other himatpy utilities are consistent with this
     ds = ds.rename({'LON':'long', 'LAT':'lat'})
@@ -119,7 +122,6 @@ def save_agg_mascons(mar_fns,agg_dir,masked_gdf,fulldata=True):
 
     outfns = []
     for ifn, marfn in enumerate(mar_fns):
-
         sdir,sfn = os.path.split(marfn)
         agg_fn = 'agg_'+sfn
         agg_fn = os.path.join(agg_dir,agg_fn)   
@@ -136,10 +138,10 @@ def save_agg_mascons(mar_fns,agg_dir,masked_gdf,fulldata=True):
         vns = agg_data['products']
         vdict = dict()
         for iv,vn in enumerate(vns):
-            vdict.update( {vn: (('time','mascons'), agg_data['data'][iv].T)} )  
+            vdict.update( {vn: (('time','mascon'), agg_data['data'][iv].T)} )  
         tdoy  = agg_data['time']
         t_all = np.array([datetime(tYear,1,1) + timedelta(days=x) for x in tdoy]) 
-        coord_dict = {'time':t_all,'mascons':agg_data['mascons']}
+        coord_dict = {'time':t_all,'mascon':agg_data['mascon']}
         dso = xr.Dataset(vdict, coords = coord_dict  )
         dso.to_netcdf(agg_fn)
 
@@ -148,9 +150,7 @@ def save_agg_mascons(mar_fns,agg_dir,masked_gdf,fulldata=True):
         
     return outfns
 
-def MAR_trend(
-        agg_fns,vname,
-        t_start='2003-01-07',t_end='2015-12-31'):
+def MAR_trend( agg_fns,vname,t_start='2003-01-07',t_end='2015-12-31'):
     '''
     Read aggregated MAR data and apply trend analysis to a specific field
     
@@ -168,22 +168,26 @@ def MAR_trend(
     '''
 
     with xr.open_mfdataset(agg_fns,concat_dim='time',combine='nested') as ds:
+        
         mardf = ds.to_dataframe()
-        mardf = mardf.reset_index(level='mascons')
-        gpdf  = mardf.loc[t_start:t_end].groupby('mascons')
+        mardf = mardf.reset_index(level='mascon')
+        gpdf  = mardf.loc[t_start:t_end].groupby('mascon')
+        
         mascons = list(gpdf.groups.keys())
         pvals = np.zeros(( 8 , len(mascons) ))
+        
         im = 0
-        for name, tgroup in mardf.groupby('mascons'):
+        for name, tgroup in mardf.groupby('mascon'):
             tmar = dt64ToDecyear( tgroup.index.values )
             mmwe = tgroup[vname].cumsum()
             pmar = trend_analysis(tmar, series=mmwe,optimization=True)
             pvals[:,im] = pmar
             im = im + 1
+            
         col_names = ['p'+str(i) for i in range(8)]
         out_df = pd.DataFrame(data=pvals.T,columns=col_names)
-        out_df['mascons'] = mascons
-        out_df = out_df[ ['mascons'] + col_names ]
+        out_df['mascon'] = mascons
+        out_df = out_df[ ['mascon'] + col_names ]
     
     return out_df
 
