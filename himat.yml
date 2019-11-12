@@ -3,7 +3,7 @@ channels:
 - conda-forge
 - digitalglobe
 dependencies:
-- python=3.6
+- python=3.7
 - jupyter
 - geopandas
 - geojson
@@ -25,7 +25,8 @@ dependencies:
 - jupyterlab 
 - h5py
 - netcdf4  
+- pip
+- regionmask
 - pip:
-  - regionmask
   - pyastronomy
   - salem
