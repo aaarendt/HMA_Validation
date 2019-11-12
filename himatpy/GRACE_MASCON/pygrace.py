@@ -330,7 +330,7 @@ def aggregate_mascons(ds, masked_gdf, scale_factor = 1):
     agg_data = {
         'data':  agg_arr,
         'time': np.asarray(time_coords),
-        'mascons' : np.asarray(mascon_coords),
+        'mascon' : np.asarray(mascon_coords),
         'products': np.asarray(products)
     }
     
