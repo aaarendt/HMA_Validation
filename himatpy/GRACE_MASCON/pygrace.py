@@ -91,7 +91,7 @@ def get_mascon_gdf(mascon_ds):
 
     return mascon_gdf
 
-def masked_mascon_gdf(grc_file,data_ds=None,mascons_fn='out_mascons.shp',verbose=False):
+def masked_mascon_gdf(grc_file,data_ds=None,mascons_fn='out_mascons.geojson',verbose=False,driver="GeoJSON"):
     '''
     return information of mascons in model domain 
 
@@ -114,7 +114,7 @@ def masked_mascon_gdf(grc_file,data_ds=None,mascons_fn='out_mascons.shp',verbose
         mascon_gdf = get_mascon_gdf(mascon)
         mascon_gdf['mascon'] = mascon_gdf.index
         masked_gdf = select_mascons(data_ds, mascon_gdf)     
-        masked_gdf.to_file(mascons_fn)
+        masked_gdf.to_file(mascons_fn,driver=driver)
     else:
         if verbose:
             print('... read info of mascons in domain from {0} ...'.format(mascons_fn))

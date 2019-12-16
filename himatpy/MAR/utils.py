@@ -9,6 +9,7 @@ from importlib import reload
 import pandas as pd
 import numpy as np
 import xarray as xr
+from PyAstronomy import pyasl
 from collections import OrderedDict
 from dask.diagnostics import ProgressBar
 
@@ -19,7 +20,7 @@ import himatpy, himatpy.GRACE_MASCON.pygrace
 reload(himatpy)
 reload(himatpy.GRACE_MASCON.pygrace)
 from himatpy.GRACE_MASCON.pygrace import aggregate_mascons, trend_analysis
-# --- reload for development purpose 
+## --- reload for development purpose 
 
 from himatpy.MAR.nsidc_download import cmr_search, cmr_download
 
@@ -177,8 +178,9 @@ def MAR_trend( agg_fns,vname,t_start='2003-01-07',t_end='2015-12-31'):
         pvals = np.zeros(( 8 , len(mascons) ))
         
         im = 0
-        for name, tgroup in mardf.groupby('mascon'):
-            tmar = dt64ToDecyear( tgroup.index.values )
+        for name, tgroup in gpdf:
+            #tmar = dt64ToDecyear( tgroup.index.values )
+            tmar = np.array( list( map( pyasl.decimalYear , tgroup.index.to_pydatetime() ) ) )
             mmwe = tgroup[vname].cumsum()
             pmar = trend_analysis(tmar, series=mmwe,optimization=True)
             pvals[:,im] = pmar
@@ -197,7 +199,7 @@ def dt64ToDecyear(t_in):
     Convert array of datetime64[ns] format to decimal year
     --- Note: Not specific to MAR dataset or GRACE data. 
               May consider move this function to another module.
-              Delete if there is built-in function/easier method 
+              Delete if there is built-in function/easier0 method 
     Parameters
     ----------
     t_in:  np.array/list/pandas DatetimeIndex, dtype: datetime64[ns] 
