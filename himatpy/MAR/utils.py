@@ -168,7 +168,8 @@ def MAR_trend( agg_fns,vname,t_start='2003-01-07',t_end='2015-12-31'):
     
     '''
 
-    with xr.open_mfdataset(agg_fns,concat_dim='time',combine='nested') as ds:
+    #with xr.open_mfdataset(agg_fns,concat_dim='time',combine='nested') as ds:
+    with xr.open_mfdataset(agg_fns,concat_dim='time',) as ds:
         
         mardf = ds.to_dataframe()
         mardf = mardf.reset_index(level='mascon')
