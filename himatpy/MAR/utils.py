@@ -74,7 +74,7 @@ def subset_data(input_fn,output_fn,tozarr=False,
     ds_out['lat'      ] = ds['LAT']
     ds_out['long'     ] = ds['LON']
     ds_out = ds_out.rename({'Y11_190':'Y', 'X11_210':'X','TIME':'time'})
-    ds_out.values = d_tt
+    ds_out.time.values = d_tt
     if tozarr:
         print('This is is development.')
     else:
@@ -189,7 +189,7 @@ def save_agg_mascons(mar_fns,agg_dir,masked_gdf):
         vdict = dict()
         for iv,vn in enumerate(vns):
             vdict.update( {vn: (('time','mascon'), agg_data['data'][iv].T)} )  
-        tdoy  = agg_data['time']
+        tdoy  = agg_data['time'].astype(float)
         t_all = np.array([datetime(tYear,1,1) + timedelta(days=x) for x in tdoy]) 
         coord_dict = {'time':t_all,'mascon':agg_data['mascon']}
         dso = xr.Dataset(vdict, coords = coord_dict  )
