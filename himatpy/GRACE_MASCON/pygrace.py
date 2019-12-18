@@ -22,6 +22,8 @@ import scipy.optimize
 from shapely.geometry import (Point, Polygon, box)
 from dask import compute
 
+from datetime import datetime, timedelta
+from PyAstronomy import pyasl
 
 CRS = pyepsg.get(4326).as_proj4()
 
@@ -121,6 +123,78 @@ def masked_mascon_gdf(grc_file,data_ds=None,mascons_fn='out_mascons.geojson',ver
         masked_gdf = gpd.read_file(mascons_fn)
         
     return masked_gdf
+
+def grace_data_df(grc_file,masked_gdf):
+    '''
+    return grace data in the MAR domain.
+    cmwe is converted to mmwe.
+    
+    Parameters
+    ----------
+    grc_file: h5py object of GRACE data file
+    masked_gdf: geodataframe
+         mascon information for mascons in model domain
+         
+    Returns
+    -------
+    gracedf: Pandas DataFrame
+        contains mascons and mmwe  in these mascons
+    '''
+    
+    soln = grc_file['solution']
+    mascons = masked_gdf['mascon']
+    t = pd.DataFrame(data = {
+        'time': grc_file['time']["ref_days_middle"][0,:]
+    })
+    grc_lst = []
+    for m in mascons:
+        df = pd.DataFrame(data={
+            'mmwe': soln['cmwe'][m-1][:] * 10,
+            'mascon': m
+        })
+        df.index = t['time'].apply(lambda x: datetime(2001,12,31) + timedelta(days=x))
+        grc_lst.append(df)
+
+    gracedf = pd.concat(grc_lst)
+    
+    return gracedf
+
+def get_full_trend(gracedf,vname='mmwe',t_start='2003-01-07',t_end='2015-12-31'):
+    '''
+    return the trend coefficients of gracedf[vname] for the chosen time period
+    
+    Parameters
+    ----------
+    gracedf: Pandas DataFrame of GRACE data in MAR domain
+    vname:      name of GRACE field for trend analysis
+    t_start:    starting date for trend analysis
+    t_end:      end date for trend analysis
+    
+    Returns
+    -------
+    pval_df:     pandas DataFrame with mascons and p0 to p7 as columns
+    '''
+    
+    gpdf = gracedf.loc[t_start:t_end].groupby('mascon')
+    mascons = list(gpdf.groups.keys())
+    pvals = np.zeros(( 8 , len(mascons) ))
+        
+    im = 0
+    for name, tgroup in gpdf:
+        #tmar = dt64ToDecyear( tgroup.index.values )
+        tmar = np.array( list( map( pyasl.decimalYear , tgroup.index.to_pydatetime() ) ) )
+        mmwe = tgroup[vname]
+        pmar = trend_analysis(tmar, series=mmwe,optimization=True)
+        pvals[:,im] = pmar
+        im = im + 1
+
+    col_names = ['p'+str(i) for i in range(8)]
+    pval_df = pd.DataFrame(data=pvals.T,columns=col_names)
+    pval_df['mascon'] = mascons
+    pval_df = pval_df[ ['mascon'] + col_names ]
+    
+    
+    return pval_df
 
 def get_cmwe_trend_analysis(mascon_gdf, f):
     """
