@@ -12,7 +12,7 @@ import xarray as xr
 from PyAstronomy import pyasl
 from collections import OrderedDict
 from dask.diagnostics import ProgressBar
-
+    
 
 import himatpy, himatpy.GRACE_MASCON.pygrace
 
@@ -25,6 +25,61 @@ from himatpy.GRACE_MASCON.pygrace import aggregate_mascons, trend_analysis
 from himatpy.MAR.nsidc_download import cmr_search, cmr_download
 
 __author__ = ['Anthony Arendt','Zheng Liu']
+
+
+def subset_data(input_fn,output_fn,tozarr=False, 
+                keepVars=None, keepDims=[],**kwargs):
+    """
+    Reads in High Mountain Asia MAR V3.5 Regional Climate Model Output from a zarr store or nc files. 
+    Output a "cleaned" xarray dataset.  
+    
+    Parameters:
+    -----------
+    input_fn : filename of input netcdf file
+    output_fn: filename of output netcdf file or the path to output zarr store
+    tozarr   :  The option to save subset to zarr store. Default is False.
+    keepVars : list of variables to keep
+    keepDims : list of dimensions to keep
+     **kwargs
+        Arbitrary keyword arguments related to xarray open_zarr or other zarr operation.
+    """
+	
+    # Density of Water
+    Ro_w = 1.e3
+    
+    try:
+        ds = xr.open_dataset( input_fn, **kwargs)
+    except:
+        print("Please provide filename!")
+        sys.exit("Exiting...")
+            
+    # Necessary dimensions 
+    needDims = ['TIME','X11_210','Y11_190']
+    #if 'SMB' in keepVars: needDims = needDims + ['SECTOR']
+    keepDims = keepDims + [tdim for tdim in needDims if tdim not in keepDims]
+
+    smb  = ds['SMB']
+    #dzsn = ds['DZSN1']
+    #rosn = ds['ROSN1']
+    #swe  = (dzsn*rosn).sum('SNOLAY')/Ro_w
+    
+    tt   = ds.TIME
+    t0   = tt[0]
+    d_tt = ( tt - t0 ) / np.timedelta64(1,'D')
+    
+    # --- copy data over instead of dropping unwanted data
+    ds_out = xr.Dataset()
+    ds_out['SMB_ice'  ] = smb[:,0]
+    ds_out['SMB_other'] = smb[:,1]
+    ds_out['lat'      ] = ds['LAT']
+    ds_out['long'     ] = ds['LON']
+    ds_out = ds_out.rename({'Y11_190':'Y', 'X11_210':'X','TIME':'time'})
+    ds_out.values = d_tt
+    if tozarr:
+        print('This is is development.')
+    else:
+        ds_out.to_netcdf(output_fn)
+    return 
 
 
 def get_xr_dataset(zstore=None,files=None,datadir=None, fname=None,multiple_nc=False, 
@@ -102,18 +157,15 @@ def get_xr_dataset(zstore=None,files=None,datadir=None, fname=None,multiple_nc=F
     ds.time.values = d_tt
     return ds
 
-
-def save_agg_mascons(mar_fns,agg_dir,masked_gdf,fulldata=True):
+def save_agg_mascons(mar_fns,agg_dir,masked_gdf):
     '''
-    save MAR data aggregated to GRACE mascons
+    save MAR subset data aggregated to GRACE mascons
     
     Parameters
     ----------
-    mar_fns:   file names including full path for the MAR files
+    mar_fns:   file names including full path for the MAR subset files
     agg_dir:   output directory of the aggregated data
     masked_gdf: geodataframe of the info for mascons in MAR domain
-    : params   fulldata=True, if the mar_fns are original full MAR dataset 
-               or abbreviated dataset of key variables.
 
     Returns
     outfns:    output file names
@@ -131,10 +183,7 @@ def save_agg_mascons(mar_fns,agg_dir,masked_gdf,fulldata=True):
 
         print('... aggregating '+sfn+' ...')
 
-        if fulldata:
-            ds = get_xr_dataset(fname=marfn,keepVars=[])
-        else:
-            ds = xr.open_dataset(marfn)
+        ds = xr.open_dataset(marfn)
         agg_data = aggregate_mascons(ds, masked_gdf, scale_factor = 1)
         vns = agg_data['products']
         vdict = dict()
