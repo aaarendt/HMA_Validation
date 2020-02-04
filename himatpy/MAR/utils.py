@@ -143,7 +143,8 @@ def subset_data(input_fn,output_fn,tozarr=False,complevel=5,zlib=True,
         print('This is in development.')
     else:
         ds_out.to_netcdf(output_fn,encoding=encoding)
-    return 
+    ds_out.close()
+    return output_fn
 
 
 def get_xr_dataset(zstore=None,files=None,datadir=None, fname=None,multiple_nc=False, 
