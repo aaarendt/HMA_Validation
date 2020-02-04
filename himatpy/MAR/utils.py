@@ -27,9 +27,11 @@ from himatpy.MAR.nsidc_download import cmr_search, cmr_download
 __author__ = ['Anthony Arendt','Zheng Liu']
 
 
-def subset_data(input_fn,output_fn,tozarr=False, 
+
+def subset_data_old(input_fn,output_fn,tozarr=False, 
                 keepVars=None, keepDims=[],**kwargs):
     """
+    TO-BE-REMOVED
     Reads in High Mountain Asia MAR V3.5 Regional Climate Model Output from a zarr store or nc files. 
     Output a "cleaned" xarray dataset.  
     
@@ -79,6 +81,68 @@ def subset_data(input_fn,output_fn,tozarr=False,
         print('This is is development.')
     else:
         ds_out.to_netcdf(output_fn)
+    return 
+
+
+def subset_data(input_fn,output_fn,tozarr=False,complevel=5,zlib=True,
+                keepVars=None, keepDims=[],**kwargs):
+    """
+    Reads in High Mountain Asia MAR V3.5 Regional Climate Model Output from a zarr store or nc files. 
+    Output a "cleaned" xarray dataset.  
+    
+    Parameters:
+    -----------
+    input_fn : filename of input netcdf file
+    output_fn: filename of output netcdf file or the path to output zarr store
+    tozarr   :  The option to save subset to zarr store. Default is False.
+    keepVars : list of variables to keep
+    keepDims : list of dimensions to keep
+     **kwargs
+        Arbitrary keyword arguments related to xarray open_dataset, including chunks, 
+    """
+	
+    # Density of Water
+    Ro_w = 1.e3
+    
+    try:
+        ds = xr.open_dataset( input_fn, **kwargs)
+    except:
+        print("Please provide filename!")
+        sys.exit("Exiting...")
+            
+    # Necessary dimensions 
+    needDims = ['TIME','X11_210','Y11_190']
+    #if 'SMB' in keepVars: needDims = needDims + ['SECTOR']
+    keepDims = keepDims + [tdim for tdim in needDims if tdim not in keepDims]
+    
+    tt   = ds.TIME
+    t0   = tt[0]
+    d_tt = ( tt - t0 ) / np.timedelta64(1,'D')
+    
+    # --- copy data over instead of dropping unwanted data
+    ds_out = xr.Dataset()
+    
+    for vn in ['SMB','RU','SU']:
+        ds_out[vn+'_ice']   = ds[vn][:,0]
+        ds_out[vn+'_other'] = ds[vn][:,1]
+    for vn in ['SF','RF']:
+        ds_out[vn]          = ds[vn]
+    for vn in ['SW']:
+        ds_out[vn+'_ice']   = ds[vn][:,0]
+        
+    ds_out['lat'      ] = ds['LAT']
+    ds_out['long'     ] = ds['LON']
+    ds_out = ds_out.rename({'Y11_190':'Y', 'X11_210':'X','TIME':'time'})
+    ds_out.time.values = d_tt
+    
+    encoding = {}
+    if zlib:
+        comp = dict(zlib=True,  complevel=complevel)
+        encoding = {var: comp for var in ds_out.data_vars}
+    if tozarr:
+        print('This is in development.')
+    else:
+        ds_out.to_netcdf(output_fn,encoding=encoding)
     return 
 
 
