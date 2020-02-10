@@ -4,7 +4,6 @@ import sys
 import glob
 import re
 from datetime import datetime, timedelta
-from importlib import reload
 
 import pandas as pd
 import numpy as np
@@ -12,11 +11,20 @@ import xarray as xr
 from PyAstronomy import pyasl
 from collections import OrderedDict
 from dask.diagnostics import ProgressBar
-    
 
+import dask    
+import joblib
+
+import zarr
+import s3fs
+import boto3
+
+    
+    
 import himatpy, himatpy.GRACE_MASCON.pygrace
 
 # --- reload for development purpose 
+from importlib import reload
 reload(himatpy)
 reload(himatpy.GRACE_MASCON.pygrace)
 from himatpy.GRACE_MASCON.pygrace import aggregate_mascons, trend_analysis
@@ -26,62 +34,6 @@ from himatpy.MAR.nsidc_download import cmr_search, cmr_download
 
 __author__ = ['Anthony Arendt','Zheng Liu']
 
-
-
-def subset_data_old(input_fn,output_fn,tozarr=False, 
-                keepVars=None, keepDims=[],**kwargs):
-    """
-    TO-BE-REMOVED
-    Reads in High Mountain Asia MAR V3.5 Regional Climate Model Output from a zarr store or nc files. 
-    Output a "cleaned" xarray dataset.  
-    
-    Parameters:
-    -----------
-    input_fn : filename of input netcdf file
-    output_fn: filename of output netcdf file or the path to output zarr store
-    tozarr   :  The option to save subset to zarr store. Default is False.
-    keepVars : list of variables to keep
-    keepDims : list of dimensions to keep
-     **kwargs
-        Arbitrary keyword arguments related to xarray open_zarr or other zarr operation.
-    """
-	
-    # Density of Water
-    Ro_w = 1.e3
-    
-    try:
-        ds = xr.open_dataset( input_fn, **kwargs)
-    except:
-        print("Please provide filename!")
-        sys.exit("Exiting...")
-            
-    # Necessary dimensions 
-    needDims = ['TIME','X11_210','Y11_190']
-    #if 'SMB' in keepVars: needDims = needDims + ['SECTOR']
-    keepDims = keepDims + [tdim for tdim in needDims if tdim not in keepDims]
-
-    smb  = ds['SMB']
-    #dzsn = ds['DZSN1']
-    #rosn = ds['ROSN1']
-    #swe  = (dzsn*rosn).sum('SNOLAY')/Ro_w
-    
-    tt   = ds.TIME
-    t0   = tt[0]
-    d_tt = ( tt - t0 ) / np.timedelta64(1,'D')
-    
-    # --- copy data over instead of dropping unwanted data
-    ds_out = xr.Dataset()
-    ds_out['SMB_ice'  ] = smb[:,0]
-    ds_out['SMB_other'] = smb[:,1]
-    ds_out['lat'      ] = ds['LAT']
-    ds_out['long'     ] = ds['LON']
-    ds_out = ds_out.rename({'Y11_190':'Y', 'X11_210':'X','TIME':'time'})
-    ds_out.time.values = d_tt
-    if tozarr:
-        print('This is is development.')
-    else:
-        ds_out.to_netcdf(output_fn)
-    return 
 
 
 def subset_data(input_fn,output_fn,tozarr=False,complevel=5,zlib=True,
@@ -147,6 +99,41 @@ def subset_data(input_fn,output_fn,tozarr=False,complevel=5,zlib=True,
     return output_fn
 
 
+def nc2zarr(fns,zpath,s3store=True,chunks=None,parallel=True):
+    '''
+    Convert netcdf files to zarr format and save to local or s3 store
+    
+    Parameters
+    ----------
+    fns     : a list of netcdf file names with full path
+    zpath   : path to the local or s3 store
+    s3store : flag of whether to save to s3 store, boolean
+    chunks  : chunks used to read and write data
+    parallel: flag to use dask to read files in parallel, boolean
+    '''
+    # --- remove lat/long from the list of vars to be concatenated.
+    with xr.open_mfdataset(fns,parallel=True,chunks=chunks) as ds:
+        vns = list(ds.data_vars)
+    for vn in ['lat','long']:
+        if vn in vns: vns.remove(vn)    
+        
+    with xr.open_mfdataset(fns,chunks=chunks,parallel=parallel, data_vars=vns) as ds:
+        if s3store:
+            fs = s3fs.S3FileSystem(anon=False)
+            ds_store = s3fs.S3Map(root=zpath,s3=fs,check=True)
+        else:
+            ds_store = zpath
+        if chunks is not None: 
+            ds = ds.chunk(chunks=chunks) 
+        else:
+            ds = ds.chunk(chunks={x:ds.chunks[x][0] for x in ds.chunks})
+        compressor = zarr.Blosc(cname='zstd', clevel=4)
+        encoding = {vname: {'compressor': compressor} for vname in ds.data_vars}
+        ds.to_zarr(store=ds_store,encoding=encoding,consolidated=True) 
+        
+    return 
+
+
 def get_xr_dataset(zstore=None,files=None,datadir=None, fname=None,multiple_nc=False, 
                         twoDcoords=False, keepVars=None, keepDims=[],**kwargs):
     """
@@ -186,7 +173,7 @@ def get_xr_dataset(zstore=None,files=None,datadir=None, fname=None,multiple_nc=F
     needDims = ['TIME','X11_210','Y11_190']
     #if 'SMB' in keepVars: needDims = needDims + ['SECTOR']
     keepDims = keepDims + [tdim for tdim in needDims if tdim not in keepDims]
-
+    
     smb  = ds['SMB']
     dzsn = ds['DZSN1']
     rosn = ds['ROSN1']
@@ -222,7 +209,84 @@ def get_xr_dataset(zstore=None,files=None,datadir=None, fname=None,multiple_nc=F
     ds.time.values = d_tt
     return ds
 
-def save_agg_mascons(mar_fns,agg_dir,masked_gdf):
+
+
+def save_agg_mascons_zarr(zstore,agg_fn,masked_gdf,zlib=True,complevel=5):
+    '''
+    save MAR subset data aggregated to GRACE mascons
+    
+    Parameters
+    ----------
+    mar_fns:   file names including full path for the MAR subset files
+    agg_dir:   output directory of the aggregated data
+    masked_gdf: geodataframe of the info for mascons in MAR domain
+
+    Returns
+    outfns:    output file names
+    '''
+    sdir,sfn = os.path.split(agg_fn)
+    if not os.path.exists(sdir): os.mkdir( os.path.abspath(agg_dir) )
+    
+    geos = [x.bounds for x in masked_gdf['geometry']] 
+    mascon_coords = masked_gdf['mascon']
+    
+        
+    with xr.open_zarr(zstore) as ds:
+        
+        # --- temporary solution for time
+        tdoy  = ds['time'].values.astype(float)
+        nday  = len(tdoy)
+        tyrs  = np.ones(nday).astype(int)*2000
+        ii = 1
+        while ii<nday:
+            if tdoy[ii]-tdoy[ii-1]<-300:
+                tyrs[ii:] = tyrs[ii:] + 1
+                ii = ii + 364
+            else:
+                ii = ii + 1
+        t_all = np.array([datetime(tYear,1,1) + timedelta(days=x) for tYear,x in zip(tyrs,tdoy)])
+        
+        # use computed lat/lon to reduce overhead for search over loop
+        lat = ds.lat.data.compute()
+        lon = ds.long.data.compute()
+        
+        # find X/Y indices for mascons
+        ixys = []
+        for geo in geos:
+            ixy = []
+            flat = np.logical_and(lat>=geo[1],lat<=geo[3])
+            flon = np.logical_and(lon>=geo[0],lon<=geo[2])
+            fdx  = np.logical_and(flat,flon)
+            if fdx.any():
+                ixy = np.where(fdx)
+            ixys.append( ixy )
+            
+        # find mascons actually intersect the model domain
+        geo_list = []
+        for i in range(len(geos)):
+            if len(ixys[i])>0:
+                geo_list.append(i)
+        dslist = []
+        
+        # aggregate by slicing the dataset with X/Y indice
+        for i in geo_list:
+            ixy = ixys[i]
+            tds = ds.isel_points(Y=ixy[0],X=ixy[1],dim='points').mean(dim='points')
+            dslist.append( tds )
+        nds = xr.concat(dslist,'mascon')
+        nds['mascon'] = ('mascon',np.array(mascon_coords)[geo_list])
+        
+        nds['time'  ] = ('time',t_all)
+        
+    encoding = {}
+    if zlib:
+        comp = dict(zlib=True,  complevel=complevel)
+        encoding = {var: comp for var in nds.data_vars}    
+    nds.to_netcdf(agg_fn,encoding=encoding)
+    nds.close()
+    return 
+
+def save_agg_mascons(mar_fns,agg_dir,masked_gdf,chunks=None):
     '''
     save MAR subset data aggregated to GRACE mascons
     
@@ -248,7 +312,7 @@ def save_agg_mascons(mar_fns,agg_dir,masked_gdf):
 
         print('... aggregating '+sfn+' ...')
 
-        ds = xr.open_dataset(marfn)
+        ds = xr.open_dataset(marfn,chunks=chunks)
         agg_data = aggregate_mascons(ds, masked_gdf, scale_factor = 1)
         vns = agg_data['products']
         vdict = dict()
@@ -284,14 +348,14 @@ def MAR_trend( agg_fns,vname,t_start='2003-01-07',t_end='2015-12-31'):
 
     #with xr.open_mfdataset(agg_fns,concat_dim='time',combine='nested') as ds:
     with xr.open_mfdataset(agg_fns,concat_dim='time',) as ds:
-        
+
         mardf = ds.to_dataframe()
         mardf = mardf.reset_index(level='mascon')
         gpdf  = mardf.loc[t_start:t_end].groupby('mascon')
-        
+
         mascons = list(gpdf.groups.keys())
         pvals = np.zeros(( 8 , len(mascons) ))
-        
+
         im = 0
         for name, tgroup in gpdf:
             #tmar = dt64ToDecyear( tgroup.index.values )
@@ -300,7 +364,7 @@ def MAR_trend( agg_fns,vname,t_start='2003-01-07',t_end='2015-12-31'):
             pmar = trend_analysis(tmar, series=mmwe,optimization=True)
             pvals[:,im] = pmar
             im = im + 1
-            
+
         col_names = ['p'+str(i) for i in range(8)]
         out_df = pd.DataFrame(data=pvals.T,columns=col_names)
         out_df['mascon'] = mascons
