@@ -9,34 +9,21 @@ import pandas as pd
 import numpy as np
 import xarray as xr
 from PyAstronomy import pyasl
-from collections import OrderedDict
-from dask.diagnostics import ProgressBar
-
-import dask    
-import joblib
 
 import zarr
 import s3fs
-import boto3
-
     
     
 import himatpy, himatpy.GRACE_MASCON.pygrace
 
-# --- reload for development purpose 
-from importlib import reload
-reload(himatpy)
-reload(himatpy.GRACE_MASCON.pygrace)
 from himatpy.GRACE_MASCON.pygrace import aggregate_mascons, trend_analysis
-## --- reload for development purpose 
-
 from himatpy.MAR.nsidc_download import cmr_search, cmr_download
 
 __author__ = ['Anthony Arendt','Zheng Liu']
 
 
 
-def subset_data(input_fn,output_fn,tozarr=False,complevel=5,zlib=True,
+def subset_data(input_fn,output_fn,complevel=5,zlib=True,
                 keepVars=None, keepDims=[],**kwargs):
     """
     Reads in High Mountain Asia MAR V3.5 Regional Climate Model Output from a zarr store or nc files. 
@@ -46,7 +33,6 @@ def subset_data(input_fn,output_fn,tozarr=False,complevel=5,zlib=True,
     -----------
     input_fn : filename of input netcdf file
     output_fn: filename of output netcdf file or the path to output zarr store
-    tozarr   :  The option to save subset to zarr store. Default is False.
     keepVars : list of variables to keep
     keepDims : list of dimensions to keep
      **kwargs
@@ -72,6 +58,11 @@ def subset_data(input_fn,output_fn,tozarr=False,complevel=5,zlib=True,
     d_tt = ( tt - t0 ) / np.timedelta64(1,'D')
     
     # --- copy data over instead of dropping unwanted data
+    #     separation into ice and other sectors are not necessary
+    #     using save_agg_mascons_zarr but keep it this way
+    #     to work with aggregate_mascons in pygrace.py. 
+    #     In future, should change to:
+    #     for vn in keepVars: ds_out[vn] = ds[vn]
     ds_out = xr.Dataset()
     
     for vn in ['SMB','RU','SU']:
@@ -81,7 +72,9 @@ def subset_data(input_fn,output_fn,tozarr=False,complevel=5,zlib=True,
         ds_out[vn]          = ds[vn]
     for vn in ['SW']:
         ds_out[vn+'_ice']   = ds[vn][:,0]
-        
+
+    # -- rename LAT/LON from model specific name to names consistent with this package.
+    #    Y/X dimension is needed for save_agg_mascons_zarr. 
     ds_out['lat'      ] = ds['LAT']
     ds_out['long'     ] = ds['LON']
     ds_out = ds_out.rename({'Y11_190':'Y', 'X11_210':'X','TIME':'time'})
@@ -91,10 +84,7 @@ def subset_data(input_fn,output_fn,tozarr=False,complevel=5,zlib=True,
     if zlib:
         comp = dict(zlib=True,  complevel=complevel)
         encoding = {var: comp for var in ds_out.data_vars}
-    if tozarr:
-        print('This is in development.')
-    else:
-        ds_out.to_netcdf(output_fn,encoding=encoding)
+    ds_out.to_netcdf(output_fn,encoding=encoding)
     ds_out.close()
     return output_fn
 
@@ -112,15 +102,15 @@ def nc2zarr(fns,zpath,s3store=True,chunks=None,parallel=True):
     parallel: flag to use dask to read files in parallel, boolean
     '''
     # --- remove lat/long from the list of vars to be concatenated.
-    with xr.open_mfdataset(fns,parallel=True,chunks=chunks) as ds:
+    with xr.open_mfdataset(fns,parallel=True,chunks=chunks,combine='nested',concat_dim='time') as ds:
         vns = list(ds.data_vars)
     for vn in ['lat','long']:
         if vn in vns: vns.remove(vn)    
         
-    with xr.open_mfdataset(fns,chunks=chunks,parallel=parallel, data_vars=vns) as ds:
+    with xr.open_mfdataset(fns,chunks=chunks,parallel=parallel, data_vars=vns,combine='nested',concat_dim='time') as ds:
         if s3store:
             fs = s3fs.S3FileSystem(anon=False)
-            ds_store = s3fs.S3Map(root=zpath,s3=fs,check=True)
+            ds_store = s3fs.S3Map(root=zpath,s3=fs,check=False,create=True)
         else:
             ds_store = zpath
         if chunks is not None: 
@@ -134,95 +124,18 @@ def nc2zarr(fns,zpath,s3store=True,chunks=None,parallel=True):
     return 
 
 
-def get_xr_dataset(zstore=None,files=None,datadir=None, fname=None,multiple_nc=False, 
-                        twoDcoords=False, keepVars=None, keepDims=[],**kwargs):
-    """
-    Reads in High Mountain Asia MAR V3.5 Regional Climate Model Output from a zarr store or nc files. 
-    Returns a "cleaned" xarray dataset.  
-    :param zstore: path to the store containing the data. 
-    :param keepVars: list of variables to keep
-     **kwargs
-        Arbitrary keyword arguments related to xarray open_zarr or other zarr operation.
-    :return: xarray dataset
-    """
-    # some reformatting is necessary since MAR output does not follow CF conventions
-
-    # first, optional selection of user-specified variables. This has to occur before the coordinate
-    # manipulations below
-	
-    # Density of Water
-    Ro_w = 1.e3
-    
-    if zstore is not None:
-        ds   = xr.open_zarr(zstore, **kwargs)
-    elif not multiple_nc:
-        try:
-            ds = xr.open_dataset( fname, **kwargs)
-        except:
-            print("Please provide filename!")
-            sys.exit("Exiting...")
-    else:
-        if datadir is not None:
-            ds = xr.open_mfdataset(os.path.join(datadir, '*.nc'), **kwargs)
-        elif files is not None:
-            ds = xr.open_mfdataset(files, **kwargs)
-        else:
-            print('Need either datadir or files for opening multiple netCDF')
-            
-    # Necessary dimensions 
-    needDims = ['TIME','X11_210','Y11_190']
-    #if 'SMB' in keepVars: needDims = needDims + ['SECTOR']
-    keepDims = keepDims + [tdim for tdim in needDims if tdim not in keepDims]
-    
-    smb  = ds['SMB']
-    dzsn = ds['DZSN1']
-    rosn = ds['ROSN1']
-    swe  = (dzsn*rosn).sum('SNOLAY')/Ro_w
-    
-    tt   = ds.TIME
-    t0   = tt[0]
-    d_tt = ( tt - t0 ) / np.timedelta64(1,'D')
-    if keepVars is not None:
-        try:
-            products = [x for x in ds]
-            deleted_vars = [y for y in products if y not in keepVars+['LAT','LON']]
-            ds = ds.drop(deleted_vars)
-            try:
-                dims = ds.coords
-                deleted_dims = [y for y in dims if y not in keepDims]
-                ds = ds.drop(deleted_dims)
-            except:
-                print(keepDims)
-                print("List of dimensions to keep does not match variable names in the dataset.")
-                sys.exit("Exiting...")
-        except:
-            print("List of variables to keep does not match variable names in the dataset.")
-            sys.exit("Exiting...")
-    # add SWE to dataset
-    ds   = ds.update({'SWE':swe})
-    ds   = ds.update({'SMB_ice':smb[:,0]})
-    ds   = ds.update({'SMB_other':smb[:,1]})
-    ds.update
-    # rename the dimensions to be lat/long so that other himatpy utilities are consistent with this
-    ds = ds.rename({'LON':'long', 'LAT':'lat'})
-    ds = ds.rename({'Y11_190':'Y', 'X11_210':'X','TIME':'time'})
-    ds.time.values = d_tt
-    return ds
-
-
-
 def save_agg_mascons_zarr(zstore,agg_fn,masked_gdf,zlib=True,complevel=5):
     '''
     save MAR subset data aggregated to GRACE mascons
     
     Parameters
     ----------
-    mar_fns:   file names including full path for the MAR subset files
-    agg_dir:   output directory of the aggregated data
+    zstore    : full path to zarr store for the MAR subset 
+    agg_fn    : file name of aggregated data file with full path
     masked_gdf: geodataframe of the info for mascons in MAR domain
+    zlib      : the flag to use zlib to save to netcdf, boolean.
+    complevel : level of compression used by zlib. 
 
-    Returns
-    outfns:    output file names
     '''
     sdir,sfn = os.path.split(agg_fn)
     if not os.path.exists(sdir): os.mkdir( os.path.abspath(agg_dir) )
@@ -271,7 +184,8 @@ def save_agg_mascons_zarr(zstore,agg_fn,masked_gdf,zlib=True,complevel=5):
         # aggregate by slicing the dataset with X/Y indice
         for i in geo_list:
             ixy = ixys[i]
-            tds = ds.isel_points(Y=ixy[0],X=ixy[1],dim='points').mean(dim='points')
+            #tds = ds.isel_points(Y=ixy[0],X=ixy[1],dim='points').mean(dim='points')
+            tds = ds.isel(Y=xr.DataArray(ixy[0],dims='points'),X=xr.DataArray(ixy[1],dims='points')).mean(dim='points')
             dslist.append( tds )
         nds = xr.concat(dslist,'mascon')
         nds['mascon'] = ('mascon',np.array(mascon_coords)[geo_list])
@@ -288,7 +202,7 @@ def save_agg_mascons_zarr(zstore,agg_fn,masked_gdf,zlib=True,complevel=5):
 
 def save_agg_mascons(mar_fns,agg_dir,masked_gdf,chunks=None):
     '''
-    save MAR subset data aggregated to GRACE mascons
+    save MAR subset netcdf data aggregated to GRACE mascons
     
     Parameters
     ----------
@@ -346,7 +260,8 @@ def MAR_trend( agg_fns,vname,t_start='2003-01-07',t_end='2015-12-31'):
     
     '''
 
-    #with xr.open_mfdataset(agg_fns,concat_dim='time',combine='nested') as ds:
+    # use the following code if xarray is updated on pangeo:
+    #     with xr.open_mfdataset(agg_fns,concat_dim='time',combine='nested') as ds:
     with xr.open_mfdataset(agg_fns,concat_dim='time',) as ds:
 
         mardf = ds.to_dataframe()
@@ -358,7 +273,6 @@ def MAR_trend( agg_fns,vname,t_start='2003-01-07',t_end='2015-12-31'):
 
         im = 0
         for name, tgroup in gpdf:
-            #tmar = dt64ToDecyear( tgroup.index.values )
             tmar = np.array( list( map( pyasl.decimalYear , tgroup.index.to_pydatetime() ) ) )
             mmwe = tgroup[vname].cumsum()
             pmar = trend_analysis(tmar, series=mmwe,optimization=True)
@@ -371,29 +285,6 @@ def MAR_trend( agg_fns,vname,t_start='2003-01-07',t_end='2015-12-31'):
         out_df = out_df[ ['mascon'] + col_names ]
     
     return out_df
-
-
-def dt64ToDecyear(t_in):
-    '''
-    Convert array of datetime64[ns] format to decimal year
-    --- Note: Not specific to MAR dataset or GRACE data. 
-              May consider move this function to another module.
-              Delete if there is built-in function/easier0 method 
-    Parameters
-    ----------
-    t_in:  np.array/list/pandas DatetimeIndex, dtype: datetime64[ns] 
-
-    returns
-    t_out = np.array of float decimal year
-    '''
-    t_out = np.zeros(t_in.shape)
-    for it,t_i in enumerate(t_in):
-        t64 = t_i.astype('datetime64[s]').astype(datetime)
-        t00 = datetime(t64.year,1,1)
-        t01 = datetime(t64.year+1,1,1)
-        fracyr = (t64-t00).total_seconds()/(t01-t00).total_seconds()
-        t_out[it] = fracyr + t00.year
-    return t_out
 
 
 
